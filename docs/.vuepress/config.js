@@ -31,22 +31,19 @@ module.exports = {
   themeConfig: {
     type: 'blog', //让首页更具有博客风格
     mode: 'light', // 明亮
+    smoothScroll: true,
     authorAvatar:'/avatar.jpeg', // 头像
     author: 'Null',
     nav: [
+      { text: '时间轴', link: '/timeline/', icon: 'reco-date' },
       { text: 'GitHub', link: 'https://github.com/jackjsj',icon: 'reco-github' },
     ],
-    // 博客配置
-    // blogConfig: {
-    //   category: {
-    //     location: 2, // 在导航栏菜单中所占的位置，默认2
-    //     text: '分类', // 默认文案 “分类”
-    //   },
-    //   tag: {
-    //     location: 3, // 在导航栏菜单中所占的位置，默认3
-    //     text: '标签', // 默认文案 “标签”
-    //   },
-    // },
+    lastUpdated:'上次更新时间',
+    // valine 评论配置
+    valineConfig: {
+      appId: 'TrtACavvq6bQYvroLvGwwvsg-gzGzoHsz',
+      appKey: 'dkiPtOLqMC7OfxOj6povepGd',
+    },
     noFoundPageByTencent: false, // 取消404腾讯公益
   },
 };
