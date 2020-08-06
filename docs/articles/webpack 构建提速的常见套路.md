@@ -1,26 +1,20 @@
-\---
-
+---
 title: webpack 构建提速的常见套路
 
 date: 2020-08-06 12:00:00
 
 categories:
-
- \- 前端
+  - 前端
 
 tags:
+  - webpack
 
- \- webpack
+  - cdn
 
- \- cdn
+  - 插件
 
- \- 插件
-
- \- 性能优化
-
-\---
-
-
+  - 性能优化
+---
 
 对于前端项目而言，【快】似乎对我们来说一直都是追求的目标，不管是 npm 下载安装依赖的速度，还是 webpack 的打包速度，亦或是实际的资源加载运行速度，都要求精益求精，没有最快，只有更快，这也正是性能优化的意义所在。本文将对提高 webpack 打包构建速度的常用套路进行展开讨论，总结疏理实际的配置方式和优缺点。
 
@@ -35,7 +29,11 @@ tags:
 首先我们可以在网上找一些免费的 CDN 加速服务提供者（这里推荐使用 [https://www.bootcdn.cn/](https://www.bootcdn.cn/)），在上面找到你引入的库，比如 `echarts`。将 CDN 地址添加到 `index.html` 中通过 script 标签引入。
 
 ```html
-<link rel="preload" as="script" href="//cdn.bootcdn.net/ajax/libs/echarts/4.6.0/echarts.min.js"/>
+<link
+  rel="preload"
+  as="script"
+  href="//cdn.bootcdn.net/ajax/libs/echarts/4.6.0/echarts.min.js"
+/>
 ...
 <script src="//cdn.bootcdn.net/ajax/libs/echarts/4.6.0/echarts.min.js"></script>
 ```
@@ -48,16 +46,16 @@ tags:
 
 ```js
 module.exports = {
-    //...
-    externals:{
-        echarts:'echarts', // 使用字符串，意味着它将被视为全局的
-        jquery:'jQuery', // 注意冒号前的为包名，冒号后的为引入的变量名
-        vue:'Vue',
-    }
-}
+  //...
+  externals: {
+    echarts: 'echarts', // 使用字符串，意味着它将被视为全局的
+    jquery: 'jQuery', // 注意冒号前的为包名，冒号后的为引入的变量名
+    vue: 'Vue',
+  },
+};
 ```
 
-`externals` 的作用，官方的解释是 【从输出的 bundle 中排除依赖】，并且所输出的 bundle 依赖于那些存在于用户环境中的依赖。结合我们的例子，那就是如果我们在 externals 中配置了`echarts` ，那么 `echarts` 将不会去 node_modules 中找到并输出，而是依赖于用户使用的环境，我们之前在 `index.html` 中添加了对 `echarts` 的引用，那么就依赖于我们提供的全局环境。 
+`externals` 的作用，官方的解释是 【从输出的 bundle 中排除依赖】，并且所输出的 bundle 依赖于那些存在于用户环境中的依赖。结合我们的例子，那就是如果我们在 externals 中配置了`echarts` ，那么 `echarts` 将不会去 node_modules 中找到并输出，而是依赖于用户使用的环境，我们之前在 `index.html` 中添加了对 `echarts` 的引用，那么就依赖于我们提供的全局环境。
 
 ### 优缺点
 
@@ -84,8 +82,8 @@ module.exports = {
       'vue-router',
       'vuex',
       'element-ui',
-      'axios'
-    ] 
+      'axios',
+    ],
     // 要进行 dll 打包的库，vendor 是打包后的名字，可以自定义
     // 如果打包的结果太大，可以分成多个入口，这样会打成多个 dll 文件
     // 结合Http2的多路复用可以提高加载速度
@@ -93,25 +91,25 @@ module.exports = {
   output: {
     path: path.resolve(__dirname, './static/js/'), // 输出的 dll 路径
     filename: '[name]_[hash:6].dll.js', // 输出的 dll 文件名,加 hash 便于缓存
-    library: '[name]_[hash:6]' // 指定library名称
+    library: '[name]_[hash:6]', // 指定library名称
   },
   plugins: [
     new webpack.DllPlugin({
-      path: path.resolve(__dirname, '/[name]-manifest.json'), 
+      path: path.resolve(__dirname, '/[name]-manifest.json'),
       // 生成 manifest.json 供 DllReferencePlugin使用
-      name: '[name]_[hash:6]' // 指定library名称
+      name: '[name]_[hash:6]', // 指定library名称
     }),
-  ]
+  ],
 };
 ```
 
 以上配置主要做了几件事：
 
-1. 设置入口，并指定要打包成 dll 的库。如果打包的结果太大，可以分成多个入口，这样会打成多个 dll 文件。结合Http2的多路复用可以提高加载速度。
-2. 指定打包后的输出路径和文件名以及 library 名； 
+1. 设置入口，并指定要打包成 dll 的库。如果打包的结果太大，可以分成多个入口，这样会打成多个 dll 文件。结合 Http2 的多路复用可以提高加载速度。
+2. 指定打包后的输出路径和文件名以及 library 名；
 3. 使用 `DllPlugin` 生成 `manifest.json` 供 `DllReferencePlugin` 使用。
 
-然后在 `package.json` 添加一个执行脚本： 
+然后在 `package.json` 添加一个执行脚本：
 
 ```json
 {
@@ -132,30 +130,28 @@ module.exports = {
   // ...
   plugins: [
     new webpack.DllReferencePlugin({
-      manifest: require('./vendor-manifest.json')
+      manifest: require('./vendor-manifest.json'),
     }),
-  ]
+  ],
 };
 ```
 
-最后，还需要在 index.html 添加将打好的`xxx.dll.js` 引入。这里可以使用 `webpack-html-plugin` 配合 `copy-webpack-plugin` 来完成。我们是将 `xxx.dll.js` 输出到 `./static/js` 路径下的，在正式打包的时候，需要将 `./static/js` 中的资源复制到 dist 中，然后在 `webpack-html-plugin` 设置 `template` 将 `xxx.dll.js` 引入。 
+最后，还需要在 index.html 添加将打好的`xxx.dll.js` 引入。这里可以使用 `webpack-html-plugin` 配合 `copy-webpack-plugin` 来完成。我们是将 `xxx.dll.js` 输出到 `./static/js` 路径下的，在正式打包的时候，需要将 `./static/js` 中的资源复制到 dist 中，然后在 `webpack-html-plugin` 设置 `template` 将 `xxx.dll.js` 引入。
 
 ```js
 module.exports = {
   // ...
   plugins: [
     new webpack.DllReferencePlugin({
-      manifest: require('./vendor-manifest.json')
+      manifest: require('./vendor-manifest.json'),
     }),
     new CopyWebpackPlugin({
-        patterns:[
-            {from:'./static/js',to:'./'}
-        ]
+      patterns: [{ from: './static/js', to: './' }],
     }),
-     new HtmlWebpackPlugin({
-         template:'index.html',
-     }),
-  ]
+    new HtmlWebpackPlugin({
+      template: 'index.html',
+    }),
+  ],
 };
 ```
 
@@ -224,7 +220,7 @@ module.exports = {
 
 ### 优缺点
 
-- 优点：发挥多核CPU的能力，加快打包速度； 配置
+- 优点：发挥多核 CPU 的能力，加快打包速度； 配置
 - 缺点：如果项目不大，文件不多，开启 thread-loader 反而会变慢，因为进程启动大概为 600ms ，进程通信也有开销。
 
 ## cache-loader 缓存
@@ -251,18 +247,18 @@ module.exports = {
 
 ### 优缺点
 
-- 优点：如果是二次构建，在本地能节省很多时间； 
+- 优点：如果是二次构建，在本地能节省很多时间；
 - 缺点：如果项目生产版本每次都必须初始构建的话，缓存反而会增加构建时间，因为对缓存文件进行保存和读取会有一些时间开销，所以请只对性能开销较大的 loader 使用此 loader。
 
 ## 其它
 
-在webpack 4 以前可能还会使用到 `uglify-webpack-plugin` 来压缩代码，一般会配合 `webpack-uglify-parallel` 来支持并行压缩，提高打包速度。但 webpack 4 提供了官方的 `uglifyjs-webpack-plugin` 并在生产环境中默认开启的，并且支持并行处理。
+在 webpack 4 以前可能还会使用到 `uglify-webpack-plugin` 来压缩代码，一般会配合 `webpack-uglify-parallel` 来支持并行压缩，提高打包速度。但 webpack 4 提供了官方的 `uglifyjs-webpack-plugin` 并在生产环境中默认开启的，并且支持并行处理。
 
-此外，还有一些可以提高打包速度的常规操作，比如配置 `resolve.modules`指向 `node_modules`  的所在位置，在 js 里出现 `import 'vue'` 这样不是相对、也不是绝对路径的写法时，会去 `node_modules` 目录下找。但是默认的配置，会采用向上递归搜索的方式去寻找，但通常项目目录里只有一个 `node_modules` ，且是在项目根目录，为了减少搜索范围，可以直接写明 `node_modules` 的全路径；同样，对于别名(`alias`)的配置，亦当如此：
+此外，还有一些可以提高打包速度的常规操作，比如配置 `resolve.modules`指向 `node_modules` 的所在位置，在 js 里出现 `import 'vue'` 这样不是相对、也不是绝对路径的写法时，会去 `node_modules` 目录下找。但是默认的配置，会采用向上递归搜索的方式去寻找，但通常项目目录里只有一个 `node_modules` ，且是在项目根目录，为了减少搜索范围，可以直接写明 `node_modules` 的全路径；同样，对于别名(`alias`)的配置，亦当如此：
 
 ```js
-function resolve (dir) {
-  return path.join(__dirname, '..', dir)
+function resolve(dir) {
+  return path.join(__dirname, '..', dir);
 }
 
 module.exports = {
@@ -270,19 +266,19 @@ module.exports = {
     extensions: ['.js', '.vue', '.json'],
     modules: [
       resolve('src'),
-      resolve('node_modules') // 直接写明模块库路径
+      resolve('node_modules'), // 直接写明模块库路径
     ],
     alias: {
-      'vue$': 'vue/dist/vue.common.js', // alias 中也直接写明全路径，减小文件搜索范围
-      'src': resolve('src'),
-      'assets': resolve('src/assets'),
-      'components': resolve('src/components'),
+      vue$: 'vue/dist/vue.common.js', // alias 中也直接写明全路径，减小文件搜索范围
+      src: resolve('src'),
+      assets: resolve('src/assets'),
+      components: resolve('src/components'),
       // ...
-      'store': resolve('src/store')
-    }
+      store: resolve('src/store'),
+    },
   },
   // ...
-}
+};
 ```
 
 又比如合理设置配置中的 `test` , `include` 或 `exclude` 属性来限定处理的范围。
