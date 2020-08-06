@@ -13,7 +13,7 @@ tags:
 
 vuex 是 vue 的**状态管理器**插件，它采用**集中式存储**的方式管理**应用中所有组件的状态**，可以使**数据流**变得**清晰**、**可追踪可预测**。
 
-本文将从 0 开始去实现 vuex 的核心功能，即 state, getters, mutations 和 actions。
+本文将从 0 开始去实现 vuex 的核心功能，即 state, getters, mutations, actions 和 modules。
 
 <!-- more -->
 
@@ -506,7 +506,7 @@ export default new Vuex.Store({
   actions: {
     increamentAsync({ commit }, payload) {
       setInterval(() => {
-        commit('increament', paload);
+        commit('increament', payload);
       }, 3000);
     },
   },
@@ -528,9 +528,496 @@ export default {
 </script>
 ```
 
-至此，vuex 的核心功能已完成了。回顾一下之前的过程，其实 vuex 的核心就是一个 store 对象，这个对象中包含了以下内容：
+## 实现 modules
 
-- **state 和 getter**，用来定义状态和计算派生状态；
-- **mutation 和 action**，用来改变状态，修改状态会自动触发视图更新，mutation 是同步方法，action 可执行异步方法；
+使用单一状态树，应用所有状态集中到一个比较大的对象。随着应用变得复杂，store 对象就会变得十分臃肿。 vuex 的 store 还有一个重要的属性 `modules` ，用它可以将 store 分割成模块。每个模块都有自己的state、mutations、actions、getters 甚至是 modules （再次模块划分）。
 
-除此之外，vuex 还包含了用于对状态进行**模块化分割**的 module, 以及提供了**mapState,mapGetters,mapActions,mapMutations**辅助函数**方便开发者**在实例中**处理 store 对象**。
+我们先看看 vuex 的 modules 是如何使用的：
+
+```js store/index.js
+export default new Vuex.Store({
+  modules: {
+    a: {
+      modules:{
+          c:{
+              state:{
+                  cCount:300
+              }
+          }
+      },
+      state: {
+        aCount: 100,
+      },
+    },
+    b: {
+      state: {
+        bCount: 200,
+      },
+    },
+  },
+  state: {
+    count: 0,
+  },
+  // ...
+});
+```
+
+我们定义了两个子模块 a 和 b，并在其内分别添加了 aCount 和 bCount 两个状态，而且还在 a 模块中定义了 c 模块，其内有一个 cCount 状态。在 App.vue 中添加获取 aCount ，bCount，cCount 的代码：
+
+```vue
+<!-- app.vue -->
+<template>
+  <div id="app">
+    <p>a module state aCount:{{$store.state.a.aCount}}</p>
+    <p>b module state bCount:{{$store.state.b.bCount}}</p>
+    <p>c module state cbCount:{{$store.state.a.c.cCount}}</p>
+  </div>
+</template>
+```
+
+要能实现这种访问，就 `a` 和 `b` 而言，就是在 state 上添加 `a`，`b` 属性 ，值为 `a` 模块定义的 state 和 `b` 模块定义的state。而就 `c` 而言，就是在 `state.a` 上添加一个 `c` 属性，其值为 `c` 模块定义的state。光添加还不够，因为这样并不会具有响应特性，所以我们需要借助 `Vue.set()` 这个方法来添加属性。
+
+我们在 Store 类中添加一个注册模块的方法 `register` ，这个方法接收三个参数，第一个是用户传入的 modules , 第二个接收一个数组，第三个参数则是根模块的 state 。
+
+我们重点解释一下第二个参数，这个数组将用来表示当前注册模块的路径，注册模块是从根模块一直递归往下注册的，比如一开始从根模块注册，我们会传一个空的数组，在注册根模块时，会找到了两个子模块 `a` 和 `b`, 这就会依次将它们注册，如果发现子模块中还包含子模块，就会再次调用 `register` 方法，而传的第二个参数就会是在原来空数组的基础上中添加一个模块的名字，如 `['a']`，第二次调用 `register` 方法时，会在 a 的子模块中找到一个 `c` 模块，此时我们要添加一个 c 属性到一个地方，其实就是 `state.a` ，但是此时`register` 接收的三个参数中没有这个 state.a ，这时就需要用到了这个 path 数组，有了这个 path ，我们才能从 rootState 取到 a 。
+
+现在我们先根据现有的思路，完成 `register` 方法，并实现对各模块中 state 的注册：
+
+```js
+class Store {
+  constructor(options) {
+    this.options = options;
+    const { state, getters, mutations, actions, modules } = options;
+    this.state = Vue.observable(state); // 通过 observable api 给对象添加响应特性
+
+    // 实现通过 getter 来访问派生状态
+    this.getters = {};
+    Object.keys(getters).forEach((key) => {
+      Object.defineProperty(this.getters, key, {
+        get: () => getters[key](this.state, this.getters),
+      });
+    });
+
+    // 注册模块
+    this.register(modules, [], this.state);
+  }
+
+  register(modules, path, rootState) {
+    // 遍历 modules 的 key
+    Object.keys(modules).forEach((modKey) => {
+      // 这里 modKey 将会是 a b c
+      const module = modules[modKey]; // 获取当前模块对象
+      const moduleState = module.state; // 获取当前模块的 state 对象
+      // a b 都是在根 state 上可以设置，但是c 需要在 a 上里面设置
+      // 所以要计算出当前模块父 state
+      // 如果将当前模块 是 a 或 b，则需设置到根 state, 此时的path是[]空数组，这时的parentState 是 this.rootState
+      // 如果当前模块 是 c ，需设置在 a 上，此时的 path 是[a],那么 parentState应该是 this.rootState.a
+      const parentState = path.reduce((cur, next) => cur[next], rootState);
+      Vue.set(parentState, modKey, moduleState);
+      // 如果当前模块还有 modules 属性, 说明还有子模块
+      if (module.modules) {
+        // 则需要递归执行注册函数
+        this.register(module.modules, path.concat(modKey), rootState);
+      }
+    });
+  }
+}
+```
+
+我们接着完成对模块中 getters 的注册。我们先在 a 模块中定义一个 getters, 然后在 App.vue 中访问这个 getters：
+
+```js store/index.js
+export default new Vuex.Store({
+  modules: {
+    a: {
+      modules: {
+        c: {
+          state: {
+            cCount: 300,
+          },
+        },
+      },
+      state: {
+        aCount: 100,
+      },
+      // 添加了一个 getter
+      getters: {
+        aCountPlusCount(state, getters, rootState) {
+          return rootState.count + state.aCount;
+        },
+      },
+    },
+    b: {
+      state: {
+        bCount: 200,
+      },
+    },
+  },
+  state: {
+    count: 0,
+  },
+  //...
+});
+```
+
+```vue App.vue
+<!-- app.vue -->
+<template>
+  <div id="app">
+    <p>a module state aCount:{{$store.state.a.aCount}}</p>
+    <p>b module state bCount:{{$store.state.b.bCount}}</p>
+    <p>c module state cCount:{{$store.state.a.c.cCount}}</p>
+    <p>a module getter aCountPlusCount:{{$store.getters.aCountPlusCount}}</p>
+    <Child></Child>
+  </div>
+</template>
+```
+
+可见，模块中的 getters 最终都被添加到 `$store.getters` 上，所以代码很简单，只需在注册过程中把模块的 getters 添加上即可：
+
+```js
+register(modules, path, rootState) {
+    Object.keys(modules).forEach((modKey) => {
+      const module = modules[modKey]; // 获取当前模块对象
+      const moduleState = module.state; // 获取当前模块的 state 对象
+      const parentState = path.reduce((cur, next) => cur[next], rootState);
+      Vue.set(parentState, modKey, moduleState);
+
+      // 获取当前模块的 getters 对象
+      const moduleGetters = module.getters;
+      if (moduleGetters) { // 只有存在才添加
+        Object.keys(moduleGetters).forEach((key) => {
+          Object.defineProperty(this.getters, key, {
+            get: () => moduleGetters[key](moduleState, this.getters, rootState),
+             // 这里会传三个值，模块中的 state ，store 的 getters, 以及根模块中的 state
+          });
+        });
+      }
+
+      // 如果当前模块还有 modules 属性, 说明还有子模块
+      if (module.modules) {
+        // 则需要递归执行注册函数
+        this.register(module.modules, path.concat(modKey), rootState);
+      }
+    });
+}
+```
+
+接着是 mutations 的注册，我们先在 a 模块中添加一个和根模块同名的 mutation increament， 然后在 `App.vue` 中提交这个 mutation：
+
+```js store/index.js
+export default new Vuex.Store({
+  modules: {
+    a: {
+      // ...
+      state: {
+        aCount: 100,
+      },
+      // 添加了一个 getter
+      getters: {
+        aCountPlusCount(state, getters, rootState) {
+          return rootState.count + state.aCount;
+        },
+      },
+      // 添加了一个 mutation
+      mutations: {
+        increament(state, payload) {
+          state.aCount += payload.value;
+        },
+      },
+    },
+    //...
+  },
+  state: {
+    count: 0,
+  },
+  // 根模块也有一个同名的 mutation
+  mutations: {
+      increament(state, payload) {
+          state.count += payload.value;
+      },
+  },
+  //...
+});
+```
+
+```vue App.vue
+<!-- app.vue -->
+<template>
+  <div id="app">
+    <p>a module state aCount:{{$store.state.a.aCount}}</p>
+    <p>b module state bCount:{{$store.state.b.bCount}}</p>
+    <p>c module state cCount:{{$store.state.a.c.cCount}}</p>
+    <p>a module getter aCountPlusCount:{{$store.getters.aCountPlusCount}}</p>
+    <p>root module state count:{{$store.state.count}}</p>
+    <!-- <Child></Child> -->
+  </div>
+</template>
+<script>
+import Child from '@/components/Child';
+
+export default {
+  components: {
+    Child,
+  },
+  mounted() {
+    setInterval(()=>{
+        this.$store.commit('increament', {
+            value:1,
+        });
+    },1000)
+  },
+};
+</script>
+```
+
+我们发现在提交 `increament` 这个 mutation 后，a 模块和根模块中的这个 mutation 方法都会执行，那我们需要修改 `commit` 方法。之前的 `commit` 方法是认为根据 mutationName 只会找到一个 mutation 方法，而实际上应该会找到多个，并用数组将执行方法存起来，并依次调用相应的方法。
+
+```js
+class Store {
+  constructor(options) {
+    this.options = options;
+    const { state, getters, mutations, actions, modules } = options;
+    this.state = Vue.observable(state); // 通过 observable api 给对象添加响应特性
+
+    // 实现通过 getter 来访问派生状态
+    this.getters = {};
+    Object.keys(getters).forEach((key) => {
+      Object.defineProperty(this.getters, key, {
+        get: () => getters[key](this.state, this.getters),
+      });
+    });
+
+    // this.mutations[key]是一个数组,数组中每个元素是一个函数
+    this.mutations = {};
+    Object.keys(mutations).forEach((key) => {
+      this.mutations[key] = [
+        (payload) => {
+          mutations[key](this.state, payload);
+        },
+      ];
+    });
+    // 注册模块
+    this.register(modules, [], this.state);
+  }
+
+  register(modules, path, rootState) {
+    // 遍历 modules 的 key
+    Object.keys(modules).forEach((modKey) => {
+      const module = modules[modKey]; // 获取当前模块对象
+      const moduleState = module.state; // 获取当前模块的 state 对象
+      const parentState = path.reduce((cur, next) => cur[next], rootState);
+      Vue.set(parentState, modKey, moduleState);
+
+      // 获取当前模块的 getters 对象
+      const moduleGetters = module.getters;
+      if (moduleGetters) {
+        Object.keys(moduleGetters).forEach((key) => {
+          Object.defineProperty(this.getters, key, {
+            get: () => moduleGetters[key](moduleState, this.getters, rootState),
+          });
+        });
+      }
+
+      // 获取当前模块的 mutations
+      const moduleMutations = module.mutations;
+      if (moduleMutations) {
+        Object.keys(moduleMutations).forEach((key) => {
+          if (this.mutations[key]) {
+            this.mutations[key].push((payload) => {
+              moduleMutations[key](moduleState, payload);
+            });
+          }
+        });
+      }
+
+      // 如果当前模块还有 modules 属性, 说明还有子模块
+      if (module.modules) {
+        // 则需要递归执行注册函数
+        this.register(module.modules, path.concat(modKey), rootState);
+      }
+    });
+  }
+
+  commit(mutationName, payload) {
+    // 根据mutationName 找到 mutation 并执行
+    this.mutations[mutationName].forEach((mutationFunc) => {
+      mutationFunc(payload);
+    });
+  }
+
+  dispatch(actionName, payload) {
+    // 根据 actionName 找到 action 并执行
+    this.options.actions[actionName](
+      {
+        state: this.state,
+        getters: this.getters,
+        commit: this.commit.bind(this), // 注意，这里要指定this
+      },
+      payload
+    );
+  }
+}
+```
+
+上面代码中，`this.mutations[key]` 是一个数组，数组中的每个元素是一个可执行的函数，在注册模块时，遍历模块的 mutations 的 key 值，然后根据 key 来判断 `this.mutations[key]` 是否已经存在，如果不存在，则创建一个新组数，如果存在，则在原数组中添加一个新的函数，该函数中实际执行的是当前模块指定的 mutation 方法，并传入了当前模块的 state 和用户传入 payload 两个参数。
+
+actions 和 mutations 类似，只需参考 mutations 的改造方式即可。官方 api 中 store 实例有一个 registerModule 方法，用来动态注册模块，实际上就是调用 register 方法就可实现，这里把这个方法加上，完整代码如下：
+
+```js
+import Vue from 'vue';
+
+class Store {
+  constructor(options) {
+    this.options = options;
+    const { state, getters, mutations, actions, modules } = options;
+    this.state = Vue.observable(state); // 通过 observable api 给对象添加响应特性
+
+    // 实现通过 getter 来访问派生状态
+    this.getters = {};
+    Object.keys(getters).forEach((key) => {
+      Object.defineProperty(this.getters, key, {
+        get: () => getters[key](this.state, this.getters),
+      });
+    });
+
+    this.mutations = {};
+    Object.keys(mutations).forEach((key) => {
+      this.mutations[key] = [
+        (payload) => {
+          mutations[key](this.state, payload);
+        },
+      ]; // this.mutations[key]是一个数组
+    });
+
+    this.actions = {};
+    Object.keys(actions).forEach((key) => {
+      this.actions[key] = [
+        (payload) => {
+          actions[key](
+            {
+              state: this.state,
+              getters: this.getters,
+              commit: this.commit.bind(this), // 注意，这里要指定this
+            },
+            payload
+          );
+        },
+      ]; // this.mutations[key]是一个数组
+    });
+
+    // 注册模块
+    this.register(modules, [], this.state);
+  }
+
+  register(modules, path, rootState) {
+    // 遍历 modules 的 key
+    Object.keys(modules).forEach((modKey) => {
+      // 这里 modKey 将会是 a b c
+      const module = modules[modKey]; // 获取当前模块对象
+      const moduleState = module.state; // 获取当前模块的 state 对象
+      // a b 都是在根 state 上可以设置，但是c 需要在 a 上里面设置
+      // 所以要计算出当前模块父 state
+      // 如果将当前模块 是 a 或 b，则需设置到根 state, 此时的path是[]空数组，这时的parentState 是 this.rootState
+      // 如果当前模块 是 c ，需设置在 a 上，此时的 path 是[a],那么 parentState应该是 this.rootState.a
+      const parentState = path.reduce((cur, next) => cur[next], rootState);
+      Vue.set(parentState, modKey, moduleState);
+
+      // 获取当前模块的 getters 对象
+      const moduleGetters = module.getters;
+      if (moduleGetters) {
+        Object.keys(moduleGetters).forEach((key) => {
+          Object.defineProperty(this.getters, key, {
+            get: () => moduleGetters[key](moduleState, this.getters, rootState),
+          });
+        });
+      }
+
+      const moduleMutations = module.mutations;
+      if (moduleMutations) {
+        Object.keys(moduleMutations).forEach((key) => {
+          if (this.mutations[key]) {
+            this.mutations[key].push((payload) => {
+              moduleMutations[key](moduleState, payload);
+            });
+          }
+        });
+      }
+
+      const moduleActions = module.actions;
+      if (moduleActions) {
+        Object.keys(moduleActions).forEach((key) => {
+          if (this.actions[key]) {
+            this.actions[key].push((payload) => {
+              moduleActions[key](
+                {
+                  state: this.state,
+                  getters: this.getters,
+                  commit: this.commit.bind(this), // 注意，这里要指定this
+                  rootState,
+                },
+                payload
+              );
+            });
+          }
+        });
+      }
+
+      // 如果当前模块还有 modules 属性, 说明还有子模块
+      if (module.modules) {
+        // 则需要递归执行注册函数
+        this.register(module.modules, path.concat(modKey), rootState);
+      }
+    });
+  }
+
+  registerModule(path, modules) {
+    this.register(modules, path, this.state);
+  }
+
+  commit(mutationName, payload) {
+    // 根据mutationName 找到 mutation 并执行
+    this.mutations[mutationName].forEach((mutationFunc) => {
+      mutationFunc(payload);
+    });
+  }
+
+  dispatch(actionName, payload) {
+    // 根据 actionName 找到 action 并执行
+    this.options.actions[actionName](
+      {
+        state: this.state,
+        getters: this.getters,
+        commit: this.commit.bind(this), // 注意，这里要指定this
+      },
+      payload
+    );
+  }
+}
+export default {
+  install(_Vue, options) {
+    _Vue.mixin({
+      beforeCreate() {
+        if (this.$options.store) {
+          // 如果有store属性，说明是根实例
+          this.$store = this.$options.store;
+        } else {
+          // 如果没有，就将其父实例的$store赋给它
+          this.$store = this.$parent.$store;
+        }
+      },
+    });
+  },
+  Store,
+};
+```
+
+至此，vuex 的核心功能已完成了。源码见：
+
+回顾一下之前的过程，其实 vuex 的核心就是一个 store 对象，这个对象中包含了以下内容：
+
+- **state和getter**，用来定义状态和计算派生状态；
+- **mutation和action**，用来改变状态，修改状态会自动触发视图更新，mutation 是同步方法，action可执行异步方法；
+- **module**，用于对状态进行**模块化分割**；
+
+除此之外，vuex 还包含了的 module, 以及提供了**mapState,mapGetters,mapActions,mapMutations**辅助函数**方便开发者**在实例中**处理store对象**。
